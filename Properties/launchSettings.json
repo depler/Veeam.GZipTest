@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "GZipTest": {
+      "commandName": "Project",
+      "commandLineArgs": "compress c:\\Data\\Downloads\\data.txt c:\\Data\\Downloads\\pack.dat"
+    }
+  }
+}
