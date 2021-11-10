@@ -6,7 +6,7 @@ using System.Threading;
 
 namespace Veeam.GZipTest
 {
-    public abstract class Processor: IDisposable
+    public abstract class Processor : IDisposable
     {
         protected const int blockSize = 1024 * 1024;
 
@@ -14,8 +14,10 @@ namespace Veeam.GZipTest
         private readonly Stream streamOut;
 
         private readonly int threadsLimit;
+        private readonly CancellationTokenSource ctsError;
         private readonly BlockingCollection<(uint index, byte[] data)> blocksIn;
         private readonly BlockingCollection<(uint index, byte[] data)> blocksOut;
+        private readonly ConcurrentQueue<Exception> exceptions;
 
         protected Processor(string fileIn, string fileOut)
         {
@@ -23,8 +25,10 @@ namespace Veeam.GZipTest
             streamOut = File.Open(fileOut, FileMode.Create);
 
             threadsLimit = Environment.ProcessorCount;
+            ctsError = new CancellationTokenSource();
             blocksIn = new BlockingCollection<(uint, byte[])>(threadsLimit * 2);
             blocksOut = new BlockingCollection<(uint, byte[])>(threadsLimit * 2);
+            exceptions = new ConcurrentQueue<Exception>();
         }
 
         protected abstract (uint index, byte[] data) ReadBlock(BinaryReader reader);
@@ -35,27 +39,48 @@ namespace Veeam.GZipTest
         {
             blocksIn?.Dispose();
             blocksOut?.Dispose();
+            ctsError?.Dispose();
             streamIn?.Dispose();
             streamOut?.Dispose();
         }
 
         protected void Run()
         {
-            var modThreads = Enumerable.Range(0, threadsLimit).Select(x => new Thread(ModifyBlocks)).ToArray();
-            foreach (var modThread in modThreads)
-                modThread.Start();
+            var readerThread = StartThread(ReadBlocks);
+            var modifierThreads = Enumerable.Range(0, threadsLimit).Select(x => StartThread(ModifyBlocks)).ToArray();
+            var writerThread = StartThread(WriteBlocks);
 
-            var writerThread = new Thread(WriteBlocks);
-            writerThread.Start();
-
-            ReadBlocks();
-
+            readerThread.Join();
             blocksIn.CompleteAdding();
-            foreach (var modThread in modThreads)
-                modThread.Join();
+
+            foreach (var modifierThread in modifierThreads)
+                modifierThread.Join();
 
             blocksOut.CompleteAdding();
             writerThread.Join();
+
+            if (!exceptions.IsEmpty)
+                throw new AggregateException(exceptions);
+        }
+
+        private Thread StartThread(Action action)
+        {
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    action();
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    exceptions.Enqueue(ex);
+                    ctsError.Cancel();
+                }
+            });
+
+            thread.Start();
+            return thread;
         }
 
         private void ReadBlocks()
@@ -65,16 +90,16 @@ namespace Veeam.GZipTest
             while (streamIn.Position < streamIn.Length)
             {
                 var block = ReadBlock(reader);
-                blocksIn.Add(block);
+                blocksIn.Add(block, ctsError.Token);
             }
         }
 
         private void ModifyBlocks()
         {
-            foreach (var blockIn in blocksIn.GetConsumingEnumerable())
+            foreach (var blockIn in blocksIn.GetConsumingEnumerable(ctsError.Token))
             {
                 var blockOut = (blockIn.index, ModifyData(blockIn.data));
-                blocksOut.Add(blockOut);
+                blocksOut.Add(blockOut, ctsError.Token);
             }
         }
 
@@ -82,7 +107,7 @@ namespace Veeam.GZipTest
         {
             using var writer = new BinaryWriter(streamOut);
 
-            foreach (var blockOut in blocksOut.GetConsumingEnumerable())
+            foreach (var blockOut in blocksOut.GetConsumingEnumerable(ctsError.Token))
                 WriteBlock(writer, blockOut.index, blockOut.data);
         }
     }
