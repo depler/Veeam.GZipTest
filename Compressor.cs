@@ -11,14 +11,14 @@ namespace Veeam.GZipTest
             compressor.Run();
         }
 
-        private uint blockCounter = 0;
+        private uint _blockCounter = 0;
 
         private Compressor(string fileIn, string fileOut) : base(fileIn, fileOut) { }
 
         protected override (uint, byte[]) ReadBlock(BinaryReader reader)
         {
-            var data = reader.ReadBytes(blockSize);
-            return (blockCounter++, data);
+            byte[] data = reader.ReadBytes(BlockSize);
+            return (_blockCounter++, data);
         }
 
         protected override byte[] ModifyData(byte[] data)

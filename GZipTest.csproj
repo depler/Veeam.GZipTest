@@ -8,4 +8,12 @@
     <RootNamespace>Veeam.GZipTest</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <EditorConfigFiles Remove="C:\Data\Sources\Veeam.GZipTest\.editorconfig" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="C:\Data\Sources\Veeam.GZipTest\.editorconfig" />
+  </ItemGroup>
+
 </Project>

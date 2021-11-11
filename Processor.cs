@@ -8,27 +8,27 @@ namespace Veeam.GZipTest
 {
     public abstract class Processor : IDisposable
     {
-        protected const int blockSize = 1024 * 1024;
+        protected const int BlockSize = 1024 * 1024;
 
-        private readonly Stream streamIn;
-        private readonly Stream streamOut;
+        private readonly Stream _streamIn;
+        private readonly Stream _streamOut;
 
-        private readonly int threadsLimit;
-        private readonly CancellationTokenSource ctsError;
-        private readonly BlockingCollection<(uint index, byte[] data)> blocksIn;
-        private readonly BlockingCollection<(uint index, byte[] data)> blocksOut;
-        private readonly ConcurrentQueue<Exception> exceptions;
+        private readonly int _threadsLimit;
+        private readonly CancellationTokenSource _ctsError;
+        private readonly BlockingCollection<(uint index, byte[] data)> _blocksIn;
+        private readonly BlockingCollection<(uint index, byte[] data)> _blocksOut;
+        private readonly ConcurrentQueue<Exception> _exceptions;
 
         protected Processor(string fileIn, string fileOut)
         {
-            streamIn = File.Open(fileIn, FileMode.Open);
-            streamOut = File.Open(fileOut, FileMode.Create);
+            _streamIn = File.Open(fileIn, FileMode.Open);
+            _streamOut = File.Open(fileOut, FileMode.Create);
 
-            threadsLimit = Environment.ProcessorCount;
-            ctsError = new CancellationTokenSource();
-            blocksIn = new BlockingCollection<(uint, byte[])>(threadsLimit * 2);
-            blocksOut = new BlockingCollection<(uint, byte[])>(threadsLimit * 2);
-            exceptions = new ConcurrentQueue<Exception>();
+            _threadsLimit = Environment.ProcessorCount;
+            _ctsError = new CancellationTokenSource();
+            _blocksIn = new BlockingCollection<(uint, byte[])>(_threadsLimit * 2);
+            _blocksOut = new BlockingCollection<(uint, byte[])>(_threadsLimit * 2);
+            _exceptions = new ConcurrentQueue<Exception>();
         }
 
         protected abstract (uint index, byte[] data) ReadBlock(BinaryReader reader);
@@ -37,30 +37,32 @@ namespace Veeam.GZipTest
 
         public void Dispose()
         {
-            blocksIn?.Dispose();
-            blocksOut?.Dispose();
-            ctsError?.Dispose();
-            streamIn?.Dispose();
-            streamOut?.Dispose();
+            _blocksIn?.Dispose();
+            _blocksOut?.Dispose();
+            _ctsError?.Dispose();
+            _streamIn?.Dispose();
+            _streamOut?.Dispose();
+
+            GC.SuppressFinalize(this);
         }
 
         protected void Run()
         {
-            var readerThread = StartThread(ReadBlocks);
-            var modifierThreads = Enumerable.Range(0, threadsLimit).Select(x => StartThread(ModifyBlocks)).ToArray();
-            var writerThread = StartThread(WriteBlocks);
+            Thread readerThread = StartThread(ReadBlocks);
+            Thread[] modifierThreads = Enumerable.Range(0, _threadsLimit).Select(x => StartThread(ModifyBlocks)).ToArray();
+            Thread writerThread = StartThread(WriteBlocks);
 
             readerThread.Join();
-            blocksIn.CompleteAdding();
 
-            foreach (var modifierThread in modifierThreads)
+            _blocksIn.CompleteAdding();
+            foreach (Thread modifierThread in modifierThreads)
                 modifierThread.Join();
 
-            blocksOut.CompleteAdding();
+            _blocksOut.CompleteAdding();
             writerThread.Join();
 
-            if (!exceptions.IsEmpty)
-                throw new AggregateException(exceptions);
+            if (!_exceptions.IsEmpty)
+                throw new AggregateException(_exceptions);
         }
 
         private Thread StartThread(Action action)
@@ -74,8 +76,8 @@ namespace Veeam.GZipTest
                 catch (OperationCanceledException) { }
                 catch (Exception ex)
                 {
-                    exceptions.Enqueue(ex);
-                    ctsError.Cancel();
+                    _exceptions.Enqueue(ex);
+                    _ctsError.Cancel();
                 }
             });
 
@@ -85,30 +87,30 @@ namespace Veeam.GZipTest
 
         private void ReadBlocks()
         {
-            using var reader = new BinaryReader(streamIn);
+            using var reader = new BinaryReader(_streamIn);
 
-            while (streamIn.Position < streamIn.Length)
+            while (_streamIn.Position < _streamIn.Length)
             {
-                var block = ReadBlock(reader);
-                blocksIn.Add(block, ctsError.Token);
+                (uint index, byte[] data) block = ReadBlock(reader);
+                _blocksIn.Add(block, _ctsError.Token);
             }
         }
 
         private void ModifyBlocks()
         {
-            foreach (var blockIn in blocksIn.GetConsumingEnumerable(ctsError.Token))
+            foreach ((uint index, byte[] data) in _blocksIn.GetConsumingEnumerable(_ctsError.Token))
             {
-                var blockOut = (blockIn.index, ModifyData(blockIn.data));
-                blocksOut.Add(blockOut, ctsError.Token);
+                byte[] modifiedData = ModifyData(data);
+                _blocksOut.Add((index, modifiedData), _ctsError.Token);
             }
         }
 
         private void WriteBlocks()
         {
-            using var writer = new BinaryWriter(streamOut);
+            using var writer = new BinaryWriter(_streamOut);
 
-            foreach (var blockOut in blocksOut.GetConsumingEnumerable(ctsError.Token))
-                WriteBlock(writer, blockOut.index, blockOut.data);
+            foreach ((uint index, byte[] data) in _blocksOut.GetConsumingEnumerable(_ctsError.Token))
+                WriteBlock(writer, index, data);
         }
     }
 }

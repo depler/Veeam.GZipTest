@@ -15,9 +15,9 @@ namespace Veeam.GZipTest
 
         protected override (uint, byte[]) ReadBlock(BinaryReader reader)
         {
-            var index = reader.ReadUInt32();
-            var length = reader.ReadInt32();
-            var data = reader.ReadBytes(length);
+            uint index = reader.ReadUInt32();
+            int length = reader.ReadInt32();
+            byte[] data = reader.ReadBytes(length);
             return (index, data);
         }
 
@@ -33,7 +33,7 @@ namespace Veeam.GZipTest
 
         protected override void WriteBlock(BinaryWriter writer, uint index, byte[] data)
         {
-            var offset = (long)index * blockSize;
+            long offset = (long)index * BlockSize;
             writer.BaseStream.Seek(offset, SeekOrigin.Begin);
             writer.Write(data);
         }
